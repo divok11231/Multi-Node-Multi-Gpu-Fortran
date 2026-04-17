@@ -1,0 +1,15 @@
+module math_kernels
+     use cudafor
+     implicit none
+ contains
+     attributes(global) subroutine matrix_add_kernel(A, B, C, N)
+         real(8), device :: A(*), B(*), C(*)
+         integer, value :: N
+         integer :: i
+         i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+         if (i <= N) then
+             C(i) = A(i) + B(i)
+         endif
+     end subroutine
+ end module
+

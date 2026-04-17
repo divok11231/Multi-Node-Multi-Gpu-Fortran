@@ -1,0 +1,63 @@
+program test_nccl_send
+    use mpi
+    use cudafor
+    use iso_c_binding
+    use nccl_fort_mod
+    implicit none
+    integer :: ierr, myRank, nRanks, istat
+    type(ncclUniqueId) :: id
+    type(c_ptr) :: comm
+    integer(kind=cuda_stream_kind), target :: stream
+    type(c_ptr) :: stream_ptr
+    real(c_double), allocatable, device, target :: x_dev(:)
+    real(c_double) :: x_host
+    type(c_ptr) :: x_ptr
+    type(c_devptr) :: x_devptr
+    call MPI_INIT(ierr)
+    call MPI_COMM_RANK(MPI_COMM_WORLD, myRank, ierr)
+    call MPI_COMM_SIZE(MPI_COMM_WORLD, nRanks, ierr)
+    if (nRanks /= 2) then
+        call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+    endif
+    istat = cudaSetDevice(myRank)
+    allocate(x_dev(1))
+    istat = cudaStreamCreate(stream)
+    stream_ptr = transfer(stream, c_null_ptr)
+    if (myRank == 0) then
+        istat = ncclGetUniqueId(id)
+    endif
+    call MPI_BCAST(id, 128, MPI_BYTE, 0, MPI_COMM_WORLD, ierr)
+    comm = c_null_ptr
+    istat = ncclCommInitRank(comm, int(nRanks, c_int), id, int(myRank, c_int))
+    if (istat /= 0 .or. .not. c_associated(comm)) then
+        call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+    endif
+    if (myRank == 0) then
+        x_host = 5.0d0
+        x_dev(1) = x_host
+    else
+        x_dev(1) = 0.0d0
+    endif
+    call MPI_BARRIER(MPI_COMM_WORLD, ierr)
+    istat = cudaDeviceSynchronize()
+    x_devptr = c_devloc(x_dev(1))
+    x_ptr = transfer(x_devptr, x_ptr)
+    istat = ncclGroupStart()
+    if (myRank == 0) then
+        istat = ncclSend(x_ptr, int(1, c_size_t), ncclFloat64, int(1, c_int), comm, c_null_ptr)
+    else if (myRank == 1) then
+        istat = ncclRecv(x_ptr, int(1, c_size_t), ncclFloat64, int(0, c_int), comm, c_null_ptr)
+    endif
+    istat = ncclGroupEnd()
+    if (istat /= 0) then
+        call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+    endif
+    istat = cudaDeviceSynchronize()
+    if (myRank == 1) then
+        x_host = x_dev(1)
+    endif
+    call MPI_BARRIER(MPI_COMM_WORLD, ierr)
+    if (c_associated(comm)) istat = ncclCommDestroy(comm)
+    istat = cudaStreamDestroy(stream)
+    call MPI_FINALIZE(ierr)
+end program test_nccl_send
